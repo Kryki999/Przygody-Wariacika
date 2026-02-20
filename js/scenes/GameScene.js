@@ -10,21 +10,18 @@ import { LEVELS } from '../data/levels.js';
 /**
  * GameScene — główna scena rozgrywki.
  *
- * Nowa pętla rozgrywki:
- *   1. Zbierz wszystkie Magiczne Zioła (🌿) → portal się aktywuje
- *   2. Wejdź w Portal → VictoryScene
- *   Pierniki (🥨) to waluta/punkty, nie blokują portalu.
- *
- * Poziomy ładowane z js/data/levels.js (data-driven).
+ * Systemy:
+ *   - Look-ahead camera (followOffset wg kierunku gracza)
+ *   - Kinematyczni wrogowie (bez kolizji z platformami)
+ *   - Dash Attack (przebijanie wrogów + niszczenie ścian)
+ *   - Combo System (mnożnik za pierniki)
+ *   - Zbieranie Ziół → aktywacja portalu → VictoryScene
  */
 export class GameScene extends Phaser.Scene {
     constructor() {
         super({ key: 'GameScene' });
     }
 
-    /**
-     * Dane startowe przekazywane przez scene.start('GameScene', { levelIndex })
-     */
     init(data) {
         this.levelIndex = data && data.levelIndex !== undefined
             ? Math.min(data.levelIndex, LEVELS.length - 1)
@@ -32,9 +29,8 @@ export class GameScene extends Phaser.Scene {
     }
 
     create() {
-        // Pobierz konfigurację poziomu
-        this._levelCfg = LEVELS[this.levelIndex];
-        const cfg = this._levelCfg;
+        const cfg = LEVELS[this.levelIndex];
+        this._levelCfg = cfg;
         const { mapWidth, mapHeight } = cfg;
 
         // ─── Managery ───
@@ -44,20 +40,34 @@ export class GameScene extends Phaser.Scene {
         this.effectsManager = new EffectsManager(this);
         this.inputManager = new InputManager(this);
 
-        // ─── Tło (skalowane do mapy) ───
+        // ─── Tło ───
         const bg = this.add.image(0, 0, cfg.background)
-            .setOrigin(0, 0)
-            .setDepth(-1);
-        // Skaluj tło żeby wypełniło całą mapę
+            .setOrigin(0, 0).setDepth(-1);
         bg.setDisplaySize(mapWidth, mapHeight);
 
-        // ─── Platformy z konfiguracji ───
+        // ─── Platformy ───
         this.platforms = this.physics.add.staticGroup();
         cfg.platforms.forEach(p => {
             const tile = this.platforms.create(p.x, p.y, p.key);
             if (p.scaleX) tile.setScale(p.scaleX, 1);
             tile.refreshBody();
         });
+
+        // ─── Kruche Ściany (breakable walls) ───
+        this.breakableWalls = this.physics.add.staticGroup();
+        this._breakableWallData = [];
+        if (cfg.breakableWalls) {
+            cfg.breakableWalls.forEach(bw => {
+                // Używamy tekstury 'ground' z tintem — widualnie odróżniamy od normalnych platform
+                const wall = this.breakableWalls.create(bw.x, bw.y, 'ground');
+                wall.setTint(0x886644);
+                wall.setScale(0.5, 0.8);
+                wall.refreshBody();
+                // Powiąż dane sekretu z obiektem ściany
+                wall._secretHerbs = bw.secretHerbs || [];
+                this._breakableWallData.push(wall);
+            });
+        }
 
         // ─── Gracz ───
         this.player = new Player(this, 100, mapHeight - 80, {
@@ -88,19 +98,18 @@ export class GameScene extends Phaser.Scene {
         // ─── Pociski wrogów ───
         this.bullets = this.physics.add.group();
 
-        // ─── Wrogowie ───
+        // ─── Wrogowie (KINEMATYCZNI — bez collider z platformami!) ───
         this.enemies = [];
         cfg.enemies.forEach(e => {
             const enemy = new Enemy(this, e.x, e.y, {
                 ...e,
-                platforms: this.platforms,
                 bullets: this.bullets
+                // UWAGA: nie przekazujemy platforms — enemy jest kinematyczny
             });
-            this.physics.add.collider(enemy.sprite, this.platforms);
             this.enemies.push(enemy);
         });
 
-        // ─── Power-upy (hardkodowane per poziom 0) ───
+        // ─── Power-upy ───
         this.powerUps = [];
         if (this.levelIndex === 0) {
             this.powerUps.push(new PowerUp(this, 200, 400, 'speed'));
@@ -113,10 +122,20 @@ export class GameScene extends Phaser.Scene {
         this.gameOver = false;
         this._victoryTriggered = false;
 
+        // ─── Combo System ───
+        this._combo = {
+            count: 0,
+            multiplier: 1,
+            timer: 0,
+            WINDOW: 2000  // ms na zebranie kolejnego piernika
+        };
+
         // ─── Kolizje ───
         this.physics.add.collider(this.player.sprite, this.platforms);
         this.physics.add.collider(this.pierniki, this.platforms);
         this.physics.add.collider(this.bullets, this.platforms, (b) => b.destroy());
+        // Gracz ↔ Kruche Ściany — normalny collider (blokuje)
+        this.physics.add.collider(this.player.sprite, this.breakableWalls);
 
         // Zbieranie pierników
         this.physics.add.overlap(
@@ -130,11 +149,14 @@ export class GameScene extends Phaser.Scene {
             (_, bullet) => { bullet.destroy(); this._playerHit(); }
         );
 
-        // ─── Kamera ───
-        // Śledź gracza; granice = wymiary mapy (gracz nie widzi pustki za mapą)
-        this.cameras.main.startFollow(this.player.sprite, true, 0.1, 0.1);
+        // ─── Look-Ahead Camera ───
+        const LOOKAHEAD_PX = 100;
+        this._lookaheadPx = LOOKAHEAD_PX;
+        this.cameras.main.startFollow(this.player.sprite, true, 0.06, 0.1);
         this.cameras.main.setBounds(0, 0, mapWidth, mapHeight);
         this.cameras.main.setBackgroundColor('#87CEEB');
+        // Inicjalny offset — w prawo (gracz spawnuje patrząc w prawo)
+        this.cameras.main.setFollowOffset(-LOOKAHEAD_PX, 0);
 
         // Ustaw granice fizyki świata
         this.physics.world.setBounds(0, 0, mapWidth, mapHeight);
@@ -160,6 +182,12 @@ export class GameScene extends Phaser.Scene {
         // ─── Gracz ───
         this.player.update(this.inputManager, this.effectsManager, delta);
 
+        // ─── Look-Ahead Camera — aktualizuj offset wg kierunku ───
+        const targetOffsetX = -this.player.facingDir * this._lookaheadPx;
+        const cam = this.cameras.main;
+        // Płynna interpolacja offsetu (0.03 = ~60 klatek do pełnego przesunięcia)
+        cam.followOffset.x += (targetOffsetX - cam.followOffset.x) * 0.03;
+
         // ─── Wrogowie ───
         this.enemies.forEach(enemy => {
             if (!enemy.isDead()) {
@@ -167,46 +195,16 @@ export class GameScene extends Phaser.Scene {
             }
         });
 
-        // ─── Kolizja gracz z wrogami (detekcja manualna) ───
-        this.enemies.forEach(enemy => {
-            if (enemy.isDead()) return;
-            const dist = Phaser.Math.Distance.Between(
-                this.player.x, this.player.y,
-                enemy.x, enemy.y
-            );
-            if (dist < 34) {
-                const playerFalling = this.player.body.velocity.y > 50;
-                const playerAbove = this.player.y < enemy.y - 10;
-                if (playerFalling && playerAbove) {
-                    const killed = enemy.takeDamage(999, this.effectsManager);
-                    if (killed) {
-                        this.score += 50;
-                        this._emitUIUpdate();
-                        this.player.sprite.setVelocityY(-280);
-                    }
-                } else {
-                    this._playerHit();
-                }
-            }
-        });
+        // ─── Kolizja gracz ↔ wrogowie ───
+        this._checkEnemyCollisions();
 
-        // ─── Kolizja gracz z ziołami ───
-        this.herbs.forEach(herb => {
-            if (herb.isCollected()) return;
-            const dist = Phaser.Math.Distance.Between(
-                this.player.x, this.player.y, herb.x, herb.y
-            );
-            if (dist < 30) {
-                herb.collect(this.effectsManager);
-                this.herbsCollected++;
-                this.score += 100;
-                this._emitUIUpdate();
-                this._checkPortalActivation();
-                if (this.audioManager) this.audioManager.playSFX('sfx_collect');
-            }
-        });
+        // ─── Dash ↔ Kruche Ściany ───
+        this._checkBreakableWalls();
 
-        // ─── Kolizja gracz z aktywnym portalem ───
+        // ─── Kolizja gracz ↔ zioła ───
+        this._checkHerbCollection();
+
+        // ─── Kolizja gracz ↔ aktywny portal ───
         if (!this._victoryTriggered && this.portal && this.portal.isActive) {
             const dist = Phaser.Math.Distance.Between(
                 this.player.x, this.player.y,
@@ -234,6 +232,175 @@ export class GameScene extends Phaser.Scene {
                 });
             }
         });
+
+        // ─── Combo timer tick ───
+        this._updateCombo(delta);
+    }
+
+    // ─────────────────────────────────────────
+    // Enemy Collision (dash vs stomp vs damage)
+    // ─────────────────────────────────────────
+
+    _checkEnemyCollisions() {
+        this.enemies.forEach(enemy => {
+            if (enemy.isDead()) return;
+            const dist = Phaser.Math.Distance.Between(
+                this.player.x, this.player.y,
+                enemy.x, enemy.y
+            );
+            if (dist < 34) {
+                // ─── DASH ATTACK → przebij się i zniszcz ───
+                if (this.player.isDashing) {
+                    const killed = enemy.takeDamage(999, this.effectsManager, {
+                        dirX: this.player.facingDir,
+                        force: 100
+                    });
+                    if (killed) {
+                        this.score += 100;
+                        this._emitUIUpdate();
+                        // Duży piernik wypadający z wroga
+                        this._spawnBigPiernik(enemy.x, enemy.y);
+                    }
+                    // Gracz NIE traci pędu — idzie dalej
+                    return;
+                }
+
+                // ─── Stomp (skok na głowę) ───
+                const playerFalling = this.player.body.velocity.y > 50;
+                const playerAbove = this.player.y < enemy.y - 10;
+                if (playerFalling && playerAbove) {
+                    const killed = enemy.takeDamage(999, this.effectsManager);
+                    if (killed) {
+                        this.score += 50;
+                        this._emitUIUpdate();
+                        this.player.sprite.setVelocityY(-350);
+                    }
+                } else {
+                    // ─── Gracz obrywa ───
+                    this._playerHit();
+                }
+            }
+        });
+    }
+
+    /**
+     * Duży piernik (5× wartość) wypadający z pokonanego wroga podczas dashu.
+     */
+    _spawnBigPiernik(x, y) {
+        const pier = this.pierniki.create(x, y - 10, 'star');
+        if (!pier) return;
+        pier.setScale(1.5);
+        pier.setTint(0xffaa00);
+        pier.setBounceY(0.6);
+        pier.setVelocity(Phaser.Math.Between(-60, 60), -200);
+        // Oznacz jako "big" — wart 5 pierników
+        pier._bigPiernik = true;
+    }
+
+    // ─────────────────────────────────────────
+    // Breakable Walls
+    // ─────────────────────────────────────────
+
+    _checkBreakableWalls() {
+        if (!this.player.isDashing) return;
+
+        this._breakableWallData.forEach(wall => {
+            if (!wall.active) return;
+            const dist = Phaser.Math.Distance.Between(
+                this.player.x, this.player.y,
+                wall.x, wall.y
+            );
+            if (dist < 50) {
+                this._destroyWall(wall);
+            }
+        });
+    }
+
+    _destroyWall(wall) {
+        // Efekt cząsteczkowy — rozpadające się cegły
+        if (this.effectsManager) {
+            this.effectsManager.flashOnEnemyDefeat(wall.x, wall.y);
+        }
+
+        // Debris particles (prosty efekt)
+        for (let i = 0; i < 6; i++) {
+            const debris = this.add.rectangle(
+                wall.x + Phaser.Math.Between(-20, 20),
+                wall.y + Phaser.Math.Between(-15, 15),
+                Phaser.Math.Between(6, 14),
+                Phaser.Math.Between(6, 14),
+                0x886644
+            );
+            this.tweens.add({
+                targets: debris,
+                x: debris.x + Phaser.Math.Between(-60, 60),
+                y: debris.y + Phaser.Math.Between(20, 80),
+                alpha: 0,
+                angle: Phaser.Math.Between(-180, 180),
+                duration: Phaser.Math.Between(400, 700),
+                onComplete: () => debris.destroy()
+            });
+        }
+
+        // Odkryj sekretne zioła za ścianą
+        if (wall._secretHerbs) {
+            wall._secretHerbs.forEach(sh => {
+                const herb = new Herb(this, sh.x, sh.y);
+                this.herbs.push(herb);
+                this.herbsTotal++;
+                this._emitUIUpdate();
+            });
+        }
+
+        // Shake
+        this.cameras.main.shake(150, 0.01);
+
+        // Zniszcz ścianę
+        wall.destroy();
+    }
+
+    // ─────────────────────────────────────────
+    // Herb Collection
+    // ─────────────────────────────────────────
+
+    _checkHerbCollection() {
+        this.herbs.forEach(herb => {
+            if (herb.isCollected()) return;
+            const dist = Phaser.Math.Distance.Between(
+                this.player.x, this.player.y, herb.x, herb.y
+            );
+            if (dist < 30) {
+                herb.collect(this.effectsManager);
+                this.herbsCollected++;
+                this.score += 100;
+                this._emitUIUpdate();
+                this._checkPortalActivation();
+                if (this.audioManager) this.audioManager.playSFX('sfx_collect');
+            }
+        });
+    }
+
+    // ─────────────────────────────────────────
+    // Combo System
+    // ─────────────────────────────────────────
+
+    _updateCombo(delta) {
+        if (this._combo.timer > 0) {
+            this._combo.timer -= delta;
+            // Emituj ratio do UI co klatkę
+            const ratio = Math.max(0, this._combo.timer / this._combo.WINDOW);
+            this.game.events.emit('ui:combo', {
+                multiplier: this._combo.multiplier,
+                timerRatio: ratio
+            });
+
+            if (this._combo.timer <= 0) {
+                // Combo wygasło
+                this._combo.count = 0;
+                this._combo.multiplier = 1;
+                this.game.events.emit('ui:combo', { multiplier: 0, timerRatio: 0 });
+            }
+        }
     }
 
     // ─────────────────────────────────────────
@@ -242,11 +409,21 @@ export class GameScene extends Phaser.Scene {
 
     _collectPiernik(playerSprite, piernik) {
         piernik.disableBody(true, true);
-        this.score += 10;
-        this.coins += 1;
+
+        // Combo
+        this._combo.count++;
+        this._combo.multiplier = Math.min(this._combo.count, 10);
+        this._combo.timer = this._combo.WINDOW;
+
+        const baseValue = piernik._bigPiernik ? 50 : 10;
+        const comboScore = baseValue * this._combo.multiplier;
+
+        this.score += comboScore;
+        this.coins += piernik._bigPiernik ? 5 : 1;
+
         this.effectsManager.sparkOnCollect(piernik.x, piernik.y);
         if (this.audioManager) this.audioManager.playSFX('sfx_collect');
-        if (this.saveManager) this.saveManager.addCoins(1);
+        if (this.saveManager) this.saveManager.addCoins(piernik._bigPiernik ? 5 : 1);
         this._emitUIUpdate();
     }
 
@@ -265,7 +442,6 @@ export class GameScene extends Phaser.Scene {
         this.player.sprite.setVelocity(0, 0);
         this.physics.pause();
 
-        // Zachowaj wynik
         if (this.saveManager) {
             const prev = this.saveManager.get('score') || 0;
             if (this.score > prev) this.saveManager.set('score', this.score);

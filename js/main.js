@@ -5,6 +5,7 @@
  *   - Scale.RESIZE zamiast FIT → gra wypełnia cały ekran (brak czarnych pasków)
  *   - Dodana VictoryScene
  */
+import { TapToStartScene } from './scenes/TapToStartScene.js';
 import { BootScene } from './scenes/BootScene.js';
 import { PreloadScene } from './scenes/PreloadScene.js';
 import { MenuScene } from './scenes/MenuScene.js';
@@ -40,7 +41,7 @@ const config = {
         }
     },
 
-    scene: [BootScene, PreloadScene, MenuScene, GameScene, UIScene, ShopScene, VictoryScene]
+    scene: [TapToStartScene, BootScene, PreloadScene, MenuScene, GameScene, UIScene, ShopScene, VictoryScene]
 };
 
 // ─── Inicjalizacja gry ───

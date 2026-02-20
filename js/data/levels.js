@@ -2,14 +2,15 @@
  * levels.js — data-driven konfiguracja poziomów.
  *
  * Każdy poziom to obiekt z:
- *   mapWidth   — szerokość świata (px)
- *   mapHeight  — wysokość świata (px)
- *   background — klucz tekstury tła
- *   platforms  — tablica { x, y, key, scaleX? }
- *   herbs      — tablica { x, y }  (Magiczne Zioła — klucze do portalu)
- *   portal     — { x, y }
- *   pierniki   — tablica { x, y }  (waluta — brak wpływu na portal)
- *   enemies    — tablica { x, y, type, speed?, hp?, patrolDistance?, aggroRange?, bulletInterval? }
+ *   mapWidth       — szerokość świata (px)
+ *   mapHeight      — wysokość świata (px)
+ *   background     — klucz tekstury tła
+ *   platforms      — tablica { x, y, key, scaleX? }
+ *   herbs          — tablica { x, y }  (Magiczne Zioła — klucze do portalu)
+ *   portal         — { x, y }
+ *   pierniki       — tablica { x, y }  (waluta — brak wpływu na portal)
+ *   enemies        — tablica { x, y, type, speed?, hp?, patrolDist?, aggroRange?, bulletInterval? }
+ *   breakableWalls — tablica { x, y, secretHerbs: [{ x, y }] }
  */
 
 export const LEVELS = [
@@ -20,7 +21,7 @@ export const LEVELS = [
         background: 'sky',
 
         platforms: [
-            // Ziemia (pełna szerokość mapy, wielokrotność tile'a ground.png ~400px)
+            // Ziemia
             { x: 200, y: 568, key: 'ground', scaleX: 2 },
             { x: 600, y: 568, key: 'ground', scaleX: 2 },
             { x: 1000, y: 568, key: 'ground', scaleX: 2 },
@@ -64,27 +65,35 @@ export const LEVELS = [
         ],
 
         enemies: [
-            // Patrulujący na ziemi
-            { x: 500, y: 540, type: 'patrol', speed: 65, hp: 1 },
-            { x: 1000, y: 540, type: 'patrol', speed: 65, hp: 1 },
-            { x: 1700, y: 540, type: 'patrol', speed: 70, hp: 1 },
+            // Patrol (z patrolDist)
+            { x: 500, y: 540, type: 'patrol', speed: 65, hp: 1, patrolDist: 100 },
+            { x: 1000, y: 540, type: 'patrol', speed: 65, hp: 1, patrolDist: 130 },
+            { x: 1700, y: 540, type: 'patrol', speed: 70, hp: 1, patrolDist: 110 },
 
-            // Patrulujący na platformach
-            { x: 600, y: 300, type: 'patrol', speed: 60, hp: 1 },
-            { x: 1350, y: 390, type: 'patrol', speed: 60, hp: 1 },
-            { x: 2050, y: 280, type: 'patrol', speed: 60, hp: 1 },
+            // Patrol na platformach
+            { x: 600, y: 300, type: 'patrol', speed: 60, hp: 1, patrolDist: 80 },
+            { x: 1350, y: 390, type: 'patrol', speed: 60, hp: 1, patrolDist: 80 },
+            { x: 2050, y: 280, type: 'patrol', speed: 60, hp: 1, patrolDist: 80 },
 
-            // Goniący
-            { x: 1200, y: 540, type: 'chaser', speed: 90, hp: 2, aggroRange: 250 },
-            { x: 1950, y: 540, type: 'chaser', speed: 90, hp: 2, aggroRange: 250 },
+            // Chasers
+            { x: 1200, y: 540, type: 'chaser', speed: 90, hp: 2, aggroRange: 250, patrolDist: 80 },
+            { x: 1950, y: 540, type: 'chaser', speed: 90, hp: 2, aggroRange: 250, patrolDist: 80 },
 
-            // Latający + strzelający
+            // Flying
             { x: 800, y: 180, type: 'flying', speed: 55, hp: 2, bulletInterval: 2500 },
             { x: 1700, y: 180, type: 'flying', speed: 55, hp: 2, bulletInterval: 2500 },
+        ],
+
+        // Kruche ściany — zniszcz dashem, odkryj sekretne zioła
+        breakableWalls: [
+            {
+                x: 1550, y: 490,
+                secretHerbs: [{ x: 1580, y: 460 }]
+            },
         ]
     },
 
-    // ─── Poziom 2 — Wieże Zamku (szkielet — do uzupełnienia) ───
+    // ─── Poziom 2 — Wieże Zamku ───
     {
         mapWidth: 2800,
         mapHeight: 600,
@@ -128,15 +137,22 @@ export const LEVELS = [
         ],
 
         enemies: [
-            { x: 600, y: 540, type: 'patrol', speed: 70, hp: 1 },
-            { x: 1200, y: 540, type: 'patrol', speed: 70, hp: 1 },
-            { x: 1800, y: 540, type: 'patrol', speed: 75, hp: 1 },
-            { x: 700, y: 270, type: 'patrol', speed: 65, hp: 1 },
-            { x: 1900, y: 240, type: 'patrol', speed: 65, hp: 1 },
-            { x: 1400, y: 540, type: 'chaser', speed: 95, hp: 2, aggroRange: 280 },
-            { x: 2300, y: 540, type: 'chaser', speed: 95, hp: 2, aggroRange: 280 },
+            { x: 600, y: 540, type: 'patrol', speed: 70, hp: 1, patrolDist: 120 },
+            { x: 1200, y: 540, type: 'patrol', speed: 70, hp: 1, patrolDist: 130 },
+            { x: 1800, y: 540, type: 'patrol', speed: 75, hp: 1, patrolDist: 110 },
+            { x: 700, y: 270, type: 'patrol', speed: 65, hp: 1, patrolDist: 80 },
+            { x: 1900, y: 240, type: 'patrol', speed: 65, hp: 1, patrolDist: 80 },
+            { x: 1400, y: 540, type: 'chaser', speed: 95, hp: 2, aggroRange: 280, patrolDist: 90 },
+            { x: 2300, y: 540, type: 'chaser', speed: 95, hp: 2, aggroRange: 280, patrolDist: 90 },
             { x: 1000, y: 180, type: 'flying', speed: 60, hp: 3, bulletInterval: 2200 },
             { x: 2100, y: 180, type: 'flying', speed: 60, hp: 3, bulletInterval: 2200 },
+        ],
+
+        breakableWalls: [
+            {
+                x: 1750, y: 490,
+                secretHerbs: [{ x: 1780, y: 460 }, { x: 1820, y: 460 }]
+            },
         ]
     }
 ];

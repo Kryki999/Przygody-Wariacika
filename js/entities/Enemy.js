@@ -1,13 +1,16 @@
 /**
- * Enemy — klasa wrogów z State Machine i patrol edge-detection.
+ * Enemy — klasa wrogów z kinematycznym (tween-based) patrolem.
+ *
+ * ARCHITEKTURA: Wrogowie NIE podlegają grawitacji silnika ani nie kolidują
+ * z platformami. Ich ruch jest czysto matematyczny (tweeny/transformacje).
+ * Hitbox (body) służy wyłącznie do detekcji overlap z graczem / dashem.
  *
  * Typy:
- *   'patrol'  — chodzi po platformach; wykrywa krawędzie i ściany → odwraca się
- *   'chaser'  — patroluje, po wejściu gracza w aggroRange goni go
- *   'flying'  — ruch sinusoidal + strzelanie pociskami
+ *   'patrol'  — tween liniowy A↔B w poziomie na stałej wysokości Y
+ *   'chaser'  — patroluje, po aggro goni gracza (tween do pozycji gracza)
+ *   'flying'  — sinusoidal Y + drift w stronę gracza + strzelanie
  *
- * NOWOŚĆ: _updatePatrol() sprawdza body.blocked.left/right (ściana)
- *         oraz brak podłoża przed wrogiem (probe point).
+ * Korzyść: zero zacinania się na szwach/łączeniach platform.
  */
 export class Enemy {
     static STATES = {
@@ -23,12 +26,12 @@ export class Enemy {
      * @param {number} y
      * @param {object} options
      *   type: 'patrol' | 'chaser' | 'flying'
-     *   aggroRange: number (px)
      *   speed: number
      *   hp: number
-     *   bulletInterval: number (ms)
+     *   patrolDist: number (px, default 120)
+     *   aggroRange: number (only for chaser)
+     *   bulletInterval: number (only for flying)
      *   bullets: Phaser.Physics.Arcade.Group
-     *   platforms: Phaser.Physics.Arcade.StaticGroup  ← nowy parametr dla edge probe
      */
     constructor(scene, x, y, options = {}) {
         this.scene = scene;
@@ -38,32 +41,77 @@ export class Enemy {
         this.hp = options.hp || 2;
         this.bullets = options.bullets || null;
         this.bulletInterval = options.bulletInterval || 2000;
-        this.platforms = options.platforms || null;
+        this.patrolDist = options.patrolDist || 120;
+
+        // Pozycja startowa (do patrolu)
+        this._startX = x;
+        this._startY = y;
 
         // Sprite (placeholder 'bomb')
         this.sprite = scene.physics.add.sprite(x, y, 'bomb');
-        this.sprite.setCollideWorldBounds(true);
+        this.sprite.setCollideWorldBounds(false);
         this.sprite.setBounce(0);
+
+        // KINEMATYCZNY: żadna grawitacja, żadne kolizje z platformami
+        this.sprite.body.allowGravity = false;
+        // Body nadal aktywny — do overlap detection
+        this.sprite.body.setImmovable(true);
 
         // Koloryzacja wg typu
         if (this.type === 'chaser') this.sprite.setTint(0xff4444);
-        if (this.type === 'flying') {
-            this.sprite.setTint(0xaa44ff);
-            this.sprite.body.allowGravity = false;
-        }
+        if (this.type === 'flying') this.sprite.setTint(0xaa44ff);
 
         this.state = this.type === 'flying' ? Enemy.STATES.FLYING : Enemy.STATES.PATROL;
-        this._patrolDir = 1;        // 1 = prawo, -1 = lewo
+        this._patrolDir = 1;
         this._sinOffset = 0;
         this._bulletTimer = 0;
         this._dead = false;
+        this._patrolTween = null;
 
-        // Edge detection — cooldown by zapobiec oscylacji
-        this._edgeCooldown = 0;
+        // Uruchom odpowiedni tryb
+        if (this.state === Enemy.STATES.PATROL) {
+            this._startPatrolTween();
+        }
     }
 
     get x() { return this.sprite.x; }
     get y() { return this.sprite.y; }
+
+    // ─────────────────────────────────────────
+    // Tween-based Patrol
+    // ─────────────────────────────────────────
+
+    _startPatrolTween() {
+        const leftX = this._startX - this.patrolDist;
+        const rightX = this._startX + this.patrolDist;
+        const durationOneLeg = (this.patrolDist * 2) / this.speed * 1000;
+
+        this.sprite.setFlipX(false);
+
+        this._patrolTween = this.scene.tweens.add({
+            targets: this.sprite,
+            x: rightX,
+            duration: durationOneLeg / 2,
+            ease: 'Linear',
+            yoyo: true,
+            repeat: -1,
+            onYoyo: () => {
+                this._patrolDir = -1;
+                this.sprite.setFlipX(true);
+            },
+            onRepeat: () => {
+                this._patrolDir = 1;
+                this.sprite.setFlipX(false);
+            }
+        });
+    }
+
+    _stopPatrolTween() {
+        if (this._patrolTween) {
+            this._patrolTween.stop();
+            this._patrolTween = null;
+        }
+    }
 
     // ─────────────────────────────────────────
     // Główna pętla update
@@ -71,116 +119,73 @@ export class Enemy {
 
     update(player, delta) {
         if (this._dead) return;
-        if (this._edgeCooldown > 0) this._edgeCooldown -= delta;
 
         switch (this.state) {
-            case Enemy.STATES.PATROL: this._updatePatrol(player, delta); break;
-            case Enemy.STATES.CHASE: this._updateChase(player); break;
-            case Enemy.STATES.FLYING: this._updateFlying(player, delta); break;
+            case Enemy.STATES.PATROL:
+                this._updatePatrol(player, delta);
+                break;
+            case Enemy.STATES.CHASE:
+                this._updateChase(player, delta);
+                break;
+            case Enemy.STATES.FLYING:
+                this._updateFlying(player, delta);
+                break;
         }
     }
 
     // ─────────────────────────────────────────
-    // Patrol z wykrywaniem krawędzi i ścian
+    // Patrol (tween handles movement; check aggro only)
     // ─────────────────────────────────────────
 
     _updatePatrol(player, delta) {
-        const sprite = this.sprite;
-        const body = sprite.body;
-
-        // Sprawdź kolizję ze ścianą (physic body)
-        const hitWall = (this._patrolDir === 1 && body.blocked.right)
-            || (this._patrolDir === -1 && body.blocked.left);
-
-        // Sprawdź brak podłoża przed wrogiem (probe)
-        const edgeAhead = this._edgeCooldown <= 0 && this._lacksGroundAhead();
-
-        if (hitWall || edgeAhead) {
-            this._patrolDir *= -1;
-            this._edgeCooldown = 300; // ~300ms cooldown by nie drgać
-        }
-
-        sprite.setVelocityX(this.speed * this._patrolDir);
-
-        // Sprite flip by postać patrzyła w kierunku ruchu
-        if (this._patrolDir === -1) sprite.setFlipX(true);
-        else sprite.setFlipX(false);
-
-        // Dla chasera: sprawdź aggro
+        // Tween zarządza pozycją X — tu tylko sprawdzamy aggro (dla chaser)
         if (this.type === 'chaser' && player) {
-            const dist = Phaser.Math.Distance.Between(sprite.x, sprite.y, player.x, player.y);
+            const dist = Phaser.Math.Distance.Between(this.sprite.x, this.sprite.y, player.x, player.y);
             if (dist < this.aggroRange) {
+                this._stopPatrolTween();
                 this.state = Enemy.STATES.CHASE;
             }
         }
     }
 
-    /**
-     * Zwraca true gdy pod przyszłą pozycją wroga (30px przed nim) nie ma platformy.
-     * Używa getTilesWithinWorldXY lub iteruje po grupie platform jako AABB probe.
-     */
-    _lacksGroundAhead() {
-        if (!this.platforms) return false;
-
-        const sprite = this.sprite;
-        // Punkt sprawdzenia: stopki wroga + 1px niżej + 30px w kierunku ruchu
-        const probeX = sprite.x + this._patrolDir * (sprite.width * 0.6 + 8);
-        const probeY = sprite.y + sprite.height / 2 + 4; // tuż pod stopami
-
-        // Iteruj po platformach — czy jest jakakolwiek w pobliżu probeX, probeY
-        let found = false;
-        this.platforms.getChildren().forEach(tile => {
-            if (found) return;
-            const tb = tile.getBounds ? tile.getBounds() : tile.body;
-            if (!tb) return;
-            // Sprawdź czy punkt probe jest nad platformą (±10px w X, platforma tuż pod)
-            const inX = probeX >= tb.x && probeX <= tb.x + (tb.width || tb.halfWidth * 2);
-            const inY = probeY >= tb.y && probeY <= tb.y + (tb.height || tb.halfHeight * 2) + 6;
-            if (inX && inY) found = true;
-        });
-
-        return !found;
-    }
-
     // ─────────────────────────────────────────
-    // Chase (goniący)
+    // Chase (goniący — ruch bezpośredni)
     // ─────────────────────────────────────────
 
-    _updateChase(player) {
-        const sprite = this.sprite;
+    _updateChase(player, delta) {
         if (!player) return;
 
-        const dist = Phaser.Math.Distance.Between(sprite.x, sprite.y, player.x, player.y);
+        const dist = Phaser.Math.Distance.Between(this.sprite.x, this.sprite.y, player.x, player.y);
 
         // Wróć do patrolu gdy gracz za daleko
-        if (dist > this.aggroRange * 1.5) {
+        if (dist > this.aggroRange * 1.8) {
             this.state = Enemy.STATES.PATROL;
+            // Resetuj pozycję startową na obecną (żeby nie teleportował do spawnu)
+            this._startX = this.sprite.x;
+            this._startPatrolTween();
             return;
         }
 
-        const dir = player.x < sprite.x ? -1 : 1;
-        sprite.setVelocityX(this.speed * dir * 1.4);
-        sprite.setFlipX(dir === -1);
-
-        // Skok w stronę gracza jeśli wyżej
-        if (player.y < sprite.y - 50 && sprite.body.blocked.down) {
-            sprite.setVelocityY(-280);
-        }
+        // Poruszaj się w stronę gracza (kinematycznie, bez fizyki)
+        const dir = player.x < this.sprite.x ? -1 : 1;
+        const chaseSpeed = this.speed * 1.4;
+        this.sprite.x += dir * chaseSpeed * (delta / 1000);
+        this.sprite.setFlipX(dir === -1);
     }
 
     // ─────────────────────────────────────────
-    // Flying (latający + strzelający)
+    // Flying (sinusoidal + strzelanie)
     // ─────────────────────────────────────────
 
     _updateFlying(player, delta) {
-        const sprite = this.sprite;
         this._sinOffset += delta * 0.003;
 
-        sprite.setVelocityY(Math.sin(this._sinOffset) * 80);
+        // Sinusoidal Y offset od pozycji startowej
+        this.sprite.y = this._startY + Math.sin(this._sinOffset) * 40;
 
         if (player) {
-            const dir = player.x < sprite.x ? -1 : 1;
-            sprite.setVelocityX(dir * this.speed * 0.5);
+            const dir = player.x < this.sprite.x ? -1 : 1;
+            this.sprite.x += dir * this.speed * 0.5 * (delta / 1000);
 
             this._bulletTimer += delta;
             if (this._bulletTimer > this.bulletInterval && this.bullets) {
@@ -212,7 +217,12 @@ export class Enemy {
     // Obrażenia i śmierć
     // ─────────────────────────────────────────
 
-    takeDamage(amount, effectsManager) {
+    /**
+     * @param {number} amount
+     * @param {object} effectsManager
+     * @param {object} [knockbackOpts] — { dirX, force } dla efektu knockback (dash attack)
+     */
+    takeDamage(amount, effectsManager, knockbackOpts) {
         if (this._dead) return false;
         this.hp -= amount;
 
@@ -226,25 +236,36 @@ export class Enemy {
         if (effectsManager) effectsManager.shakeHitEnemy();
 
         if (this.hp <= 0) {
-            this._die(effectsManager);
+            this._die(effectsManager, knockbackOpts);
             return true;
         }
         return false;
     }
 
-    _die(effectsManager) {
+    _die(effectsManager, knockbackOpts) {
         this._dead = true;
         this.state = Enemy.STATES.DEAD;
+        this._stopPatrolTween();
 
         if (effectsManager) {
             effectsManager.flashOnEnemyDefeat(this.sprite.x, this.sprite.y);
         }
 
+        // Knockback animation (dash attack) lub standardowy fade
+        const targetX = knockbackOpts
+            ? this.sprite.x + (knockbackOpts.dirX || 1) * (knockbackOpts.force || 80)
+            : this.sprite.x;
+        const targetY = knockbackOpts
+            ? this.sprite.y - 20
+            : this.sprite.y - 30;
+
         this.scene.tweens.add({
             targets: this.sprite,
             alpha: 0,
-            y: this.sprite.y - 30,
-            duration: 400,
+            x: targetX,
+            y: targetY,
+            duration: knockbackOpts ? 300 : 400,
+            ease: knockbackOpts ? 'Power2' : 'Linear',
             onComplete: () => { if (this.sprite.active) this.sprite.destroy(); }
         });
     }

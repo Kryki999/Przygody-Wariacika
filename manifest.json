@@ -3,7 +3,7 @@
     "short_name": "Wariacik",
     "description": "Przygody Wariacika — gra przeglądarkowa 2D",
     "start_url": "/",
-    "display": "standalone",
+    "display": "fullscreen",
     "orientation": "landscape",
     "background_color": "#1a1a2e",
     "theme_color": "#e94560",

@@ -20,8 +20,11 @@ export class Player {
 
         // Sprite gracza
         this.sprite = scene.physics.add.sprite(x, y, 'dude');
-        this.sprite.setBounce(0.1);
-        this.sprite.setCollideWorldBounds(false); // Granice ustawia kamera/scena
+        this.sprite.setBounce(0.05);
+        this.sprite.setCollideWorldBounds(false);
+        // DRAG: wysoki opór poziomy — postac zatrzymuje się niemal mądej po puszczeniu klawiszy.
+        // Zapobiega efektowi "ślizgania się po lodzie".
+        this.sprite.setDragX(1800);
 
         // Skórka ze sklepu
         if (sm) {
@@ -104,7 +107,9 @@ export class Player {
 
         // ─── Skok ───
         if (inputManager.jump && onGround) {
-            const jumpPower = this.activeBuffs.speed ? -400 : -340;
+            // Prędkość skoku zwiększona proporcjonalnie do grawitacji (1200 vs 320).
+            // Dzięki temu gracz skacze na tę samą wysokość, ale znacznie szybciej.
+            const jumpPower = this.activeBuffs.speed ? -820 : -680;
             sprite.setVelocityY(jumpPower);
         }
     }

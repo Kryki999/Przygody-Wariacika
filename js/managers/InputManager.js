@@ -2,7 +2,8 @@
  * InputManager — uniwersalny menedżer wejścia (mobile-first refaktor).
  *
  * Mobilne sterowanie:
- *   - Wirtualny joystick (lewy dolny róg) — analogowy wychył -1..1
+ *   - Wirtualny joystick (lewy dolny róg) — BINARNE D-pad (nie analogowe!)
+ *     Wychyl joystick w dowolną stronę > DEADZONE_PX → pełna prędkość lewo/prawo.
  *   - Przycisk JUMP (prawy dolny róg)
  *   - Przycisk SUPERMOC/ATAK (poniżej skoku)
  *
@@ -10,14 +11,15 @@
  *
  * Interfejs wyjściowy:
  *   left, right  — boolean (kompatybilność wsteczna)
- *   joystickX    — float -1..1 (proporcjonalny ruch)
- *   joystickY    — float -1..1
+ *   joystickX    — -1 | 0 | +1  (binarne, jak D-pad)
+ *   joystickY    — -1 | 0 | +1  (binarne)
  *   jump         — boolean (jednorazowy impuls)
  *   attack       — boolean (jednorazowy impuls)
  */
 export class InputManager {
-    // Martwa strefa joysticka (brak ruchu przy małych wychyleniach)
-    static DEADZONE = 0.15;
+    // Strefa martwa joysticka w pikselach (nie w znormalizowanych jednostkach)
+    // Wychylenie > DEADZONE_PX → sygnał binarny ±1
+    static DEADZONE_PX = 12;
 
     constructor(scene) {
         this.scene = scene;
@@ -168,6 +170,11 @@ export class InputManager {
     // Obliczenie wychylenia joysticka
     // ─────────────────────────────────────────
 
+    /**
+     * BINARNE D-PAD: ignorujemy siłę wychylenia.
+     * Liczy się tylko KIERUNEK i czy przekroczono DEADZONE_PX.
+     * joystickX = -1 | 0 | +1  (jak lewo/prawy klawisz klawiatury)
+     */
     _computeJoystick() {
         if (!this._joystick.active) {
             this.joystickX = 0;
@@ -177,15 +184,11 @@ export class InputManager {
 
         const dx = this._joystick.curX - this._joystick.baseX;
         const dy = this._joystick.curY - this._joystick.baseY;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        const r = this._joystick.radius;
+        const dz = InputManager.DEADZONE_PX;
 
-        const nx = dist > 0 ? dx / dist : 0;
-        const ny = dist > 0 ? dy / dist : 0;
-        const clamped = Math.min(dist, r) / r;
-
-        this.joystickX = Math.abs(nx * clamped) < InputManager.DEADZONE ? 0 : nx * clamped;
-        this.joystickY = Math.abs(ny * clamped) < InputManager.DEADZONE ? 0 : ny * clamped;
+        // Tylko kierunek — brak pośrednich wartości
+        this.joystickX = dx > dz ? 1 : dx < -dz ? -1 : 0;
+        this.joystickY = dy > dz ? 1 : dy < -dz ? -1 : 0;
     }
 
     // ─────────────────────────────────────────
@@ -196,22 +199,22 @@ export class InputManager {
         const kb = this.cursors;
         const wasd = this.wasd;
 
-        // Klawiatury — joystick analogowy symulowany jako ±1
+        // Klawiatura — binarne ±1 (taka sama logika jak joystick)
         let kbX = 0;
         if (kb.left.isDown || (wasd && wasd.left.isDown)) kbX = -1;
         else if (kb.right.isDown || (wasd && wasd.right.isDown)) kbX = 1;
 
         this._computeJoystick();
 
-        // Jeśli joystick dotykowy aktywny — nadpisz wartość; inaczej użyj klawiatury
+        // Joystick dotykowy ma priorytet nad klawiaturą
         if (!this._joystick.active) {
             this.joystickX = kbX;
             this.joystickY = 0;
         }
 
-        // Kompatybilność wsteczna: left/right
-        this.left = this.joystickX < -InputManager.DEADZONE;
-        this.right = this.joystickX > InputManager.DEADZONE;
+        // Kompatybilność wsteczna: left/right (deadzone: 0 = wystarczy, bo wartości są -1/0/+1)
+        this.left = this.joystickX < 0;
+        this.right = this.joystickX > 0;
 
         // Jump
         const kbJump = Phaser.Input.Keyboard.JustDown(kb.up)

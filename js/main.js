@@ -33,7 +33,9 @@ const config = {
     physics: {
         default: 'arcade',
         arcade: {
-            gravity: { y: 320 },
+            // RETRO PHYSICS: 4× większa grawitacja — postac jest ciężka i szybko spada.
+            // Skok wyrównany wysoką prędkością w Player.js.
+            gravity: { y: 1200 },
             debug: false
         }
     },
@@ -46,6 +48,32 @@ const game = new Phaser.Game(config);
 
 // ─── Overlay orientacji (DOM — niezależny od Phasera) ───
 const orientationOverlay = new OrientationOverlay(game);
+
+/**
+ * orientationchange DEBOUNCE
+ * Przeglądarki mobilne opuszczają zdarzenie zmiany rozmiaru okna z opóźnieniem
+ * po obrocie ekranu (pasek adresu chowa się, viewport się zmienia).
+ * Czekamy 250ms, żeby dokładne wymiary były już dostępne,
+ * a następnie wymuszamy na Phaserze ponowne przeliczenie canvasa.
+ */
+let _orientationTimer = null;
+window.addEventListener('orientationchange', () => {
+    clearTimeout(_orientationTimer);
+    _orientationTimer = setTimeout(() => {
+        // Wymuś Phasera do odczytu aktualnego window.innerWidth/innerHeight
+        game.scale.refresh();
+        // Również bezpośrednio ustaw rozmiar na bieżący rozmiar okna
+        game.scale.resize(window.innerWidth, window.innerHeight);
+    }, 250);
+});
+
+// Dodatkowe zabezpieczenie: reaguj również na zwykły resize (przeglądarka desktop)
+window.addEventListener('resize', () => {
+    clearTimeout(_orientationTimer);
+    _orientationTimer = setTimeout(() => {
+        game.scale.refresh();
+    }, 100);
+});
 
 // ─── PWA: Install Prompt ───
 let _deferredInstallPrompt = null;

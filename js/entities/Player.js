@@ -1,5 +1,6 @@
 /**
- * Player — klasa gracza enkapsulująca HP, prędkość, buffy i integrację z managerami.
+ * Player — klasa gracza z obsługą analogowego joysticka.
+ * Kompatybilna z nowym InputManager (joystickX -1..1).
  */
 export class Player {
     /**
@@ -19,16 +20,16 @@ export class Player {
 
         // Sprite gracza
         this.sprite = scene.physics.add.sprite(x, y, 'dude');
-        this.sprite.setBounce(0.2);
-        this.sprite.setCollideWorldBounds(true);
+        this.sprite.setBounce(0.1);
+        this.sprite.setCollideWorldBounds(false); // Granice ustawia kamera/scena
 
-        // Zastosuj skórkę ze sklepu
+        // Skórka ze sklepu
         if (sm) {
             const skin = sm.getActiveSkin();
             if (skin) this.sprite.setTint(skin.effect.tint);
         }
 
-        // Rejestracja animacji (jeśli jeszcze nie istnieją)
+        // Animacje (jeśli nie istnieją)
         if (!scene.anims.exists('left')) {
             scene.anims.create({ key: 'left', frames: scene.anims.generateFrameNumbers('dude', { start: 0, end: 3 }), frameRate: 10, repeat: -1 });
             scene.anims.create({ key: 'turn', frames: [{ key: 'dude', frame: 4 }], frameRate: 20 });
@@ -38,11 +39,11 @@ export class Player {
         // Stan power-upów
         this.activeBuffs = {};
 
-        // Cooldown po otrzymaniu obrażeń (invincibility frames)
+        // Invincibility frames po obrażeniach
         this._damageCooldown = false;
         this._wasOnGround = false;
 
-        // Licznik klatek dla efektu kurzu przy biegu
+        // Timer kurzu przy biegu
         this._runDustTimer = 0;
     }
 
@@ -51,11 +52,12 @@ export class Player {
     get y() { return this.sprite.y; }
 
     /**
-     * Główna funkcja update — wywołuj z GameScene.update()
+     * Główna funkcja update — wywołuj z GameScene.update().
+     * Używa inputManager.joystickX do proporcjonalnego ruchu.
      */
     update(inputManager, effectsManager, delta) {
         const sprite = this.sprite;
-        const onGround = sprite.body.touching.down || sprite.body.blocked.down;
+        const onGround = sprite.body.blocked.down;
 
         // ─── Lądowanie (detekcja krawędzi) ───
         if (onGround && !this._wasOnGround) {
@@ -67,34 +69,33 @@ export class Player {
         }
         this._wasOnGround = onGround;
 
-        // ─── Ruch poziomy ───
-        const currentSpeed = this.activeBuffs.speed ? this.speed * 1.5 : this.speed;
+        // ─── Ruch poziomy (proporcjonalny do wychylenia joysticka) ───
+        const baseSpeed = this.activeBuffs.speed ? this.speed * 1.5 : this.speed;
+        const joystickX = inputManager.joystickX || 0;
 
-        if (inputManager.left) {
-            sprite.setVelocityX(-currentSpeed);
+        // Dead zone jest już obsłużona w InputManager; tu używamy wartości wprost
+        const velocityX = joystickX * baseSpeed;
+        sprite.setVelocityX(velocityX);
+
+        // Animacja kierunku
+        if (joystickX < -0.1) {
             sprite.anims.play('left', true);
-
-            // Efekt kurzu przy biegu
             if (onGround && effectsManager) {
                 this._runDustTimer += delta;
-                if (this._runDustTimer > 120) {
+                if (this._runDustTimer > 130) {
                     effectsManager.dustOnRun(sprite.x + 10, sprite.y);
                     this._runDustTimer = 0;
                 }
             }
-
-        } else if (inputManager.right) {
-            sprite.setVelocityX(currentSpeed);
+        } else if (joystickX > 0.1) {
             sprite.anims.play('right', true);
-
             if (onGround && effectsManager) {
                 this._runDustTimer += delta;
-                if (this._runDustTimer > 120) {
+                if (this._runDustTimer > 130) {
                     effectsManager.dustOnRun(sprite.x - 10, sprite.y);
                     this._runDustTimer = 0;
                 }
             }
-
         } else {
             sprite.setVelocityX(0);
             sprite.anims.play('turn');
@@ -103,14 +104,14 @@ export class Player {
 
         // ─── Skok ───
         if (inputManager.jump && onGround) {
-            const jumpPower = this.activeBuffs.speed ? -380 : -330;
+            const jumpPower = this.activeBuffs.speed ? -400 : -340;
             sprite.setVelocityY(jumpPower);
         }
     }
 
     /**
      * Zadaj obrażenia graczowi.
-     * @returns {boolean} true jeśli obrażenie zostało przyjęte (nie na cooldownie)
+     * @returns {boolean} true jeśli obrażenie przyjęte
      */
     takeDamage(amount, effectsManager) {
         if (this._damageCooldown || this.activeBuffs.invincible) return false;
@@ -121,7 +122,7 @@ export class Player {
             effectsManager.shakePlayerHurt();
         }
 
-        // Mignięcie (invincibility frames: 1.5s)
+        // Miganie (invincibility frames ~1.5s)
         this._damageCooldown = true;
         this.scene.tweens.add({
             targets: this.sprite,
@@ -138,24 +139,17 @@ export class Player {
         return true;
     }
 
-    /**
-     * Aplikuje chwilowy buff power-upa.
-     * @param {{ type: string, duration: number }} buff
-     */
     applyBuff(buff) {
         this.activeBuffs[buff.type] = true;
 
-        // Wizualny wskaźnik aktywnego buffa
         if (buff.type === 'invincible') this.sprite.setTint(0x00ffff);
         if (buff.type === 'speed') this.sprite.setTint(0xffaa00);
 
-        // Usuń buff po czasie
         this.scene.time.addEvent({
             delay: buff.duration,
             callback: () => {
                 delete this.activeBuffs[buff.type];
                 this.sprite.clearTint();
-                // Przywróć skórkę ze sklepu jeśli była aktywna
                 if (buff.onExpire) buff.onExpire();
             }
         });

@@ -1,43 +1,80 @@
 /**
- * InputManager — uniwersalny menedżer wejścia.
- * Unifikuje sygnały z klawiatury i multi-touch dotyku.
- * 
+ * InputManager — uniwersalny menedżer wejścia (mobile-first refaktor).
+ *
+ * Mobilne sterowanie:
+ *   - Wirtualny joystick (lewy dolny róg) — analogowy wychył -1..1
+ *   - Przycisk JUMP (prawy dolny róg)
+ *   - Przycisk SUPERMOC/ATAK (poniżej skoku)
+ *
+ * Każdy element śledzi osobny pointerId → multi-touch.
+ *
  * Interfejs wyjściowy:
- *   inputManager.left   — boolean
- *   inputManager.right  — boolean
- *   inputManager.jump   — boolean (jednorazowy impuls)
- *   inputManager.attack — boolean (jednorazowy impuls)
+ *   left, right  — boolean (kompatybilność wsteczna)
+ *   joystickX    — float -1..1 (proporcjonalny ruch)
+ *   joystickY    — float -1..1
+ *   jump         — boolean (jednorazowy impuls)
+ *   attack       — boolean (jednorazowy impuls)
  */
 export class InputManager {
+    // Martwa strefa joysticka (brak ruchu przy małych wychyleniach)
+    static DEADZONE = 0.15;
+
     constructor(scene) {
         this.scene = scene;
 
-        // Stan logiczny — niezależny od źródła wejścia
+        // Stan wyjściowy
         this.left = false;
         this.right = false;
+        this.joystickX = 0;
+        this.joystickY = 0;
         this.jump = false;
         this.attack = false;
 
-        // Wewnętrzne — touch tracking
-        this._touchLeft = false;
-        this._touchRight = false;
-        this._touchJump = false;
-        this._touchAttack = false;
+        // Wewnętrzny stan zdarzeń
+        this._jumpFired = false;
+        this._attackFired = false;
 
-        // Śledzenie ekranów dotykowych wg pointerId
-        this._activePointers = new Map();
+        // Wirtualny joystick — dane
+        this._joystick = {
+            active: false,
+            pointerId: -1,
+            baseX: 0, baseY: 0,    // centrum bazy na ekranie
+            curX: 0, curY: 0,
+            radius: 60             // max wychylenie w px
+        };
+
+        // Przyciski mobilne — dane
+        this._jumpBtn = { active: false, pointerId: -1 };
+        this._attackBtn = { active: false, pointerId: -1 };
+
+        // Wizualne obiekty Phasera
+        this._graphics = null;
+        this._jumpBtnGfx = null;
+        this._attackBtnGfx = null;
+        this._jumpBtnTxt = null;
+        this._attackBtnTxt = null;
 
         this._setupKeyboard();
         this._setupTouch();
-        this._createMobileUI();
+
+        const isMobile = !scene.sys.game.device.os.desktop;
+        if (isMobile) {
+            this._createMobileUI();
+        }
+
+        // Re-pozycjonowanie przy zmianie rozmiaru
+        scene.scale.on('resize', this._onResize, this);
     }
+
+    // ─────────────────────────────────────────
+    // Konfiguracja wejścia
+    // ─────────────────────────────────────────
 
     _setupKeyboard() {
         const kb = this.scene.input.keyboard;
         this.cursors = kb.createCursorKeys();
         this.wasd = kb.addKeys({
             up: Phaser.Input.Keyboard.KeyCodes.W,
-            down: Phaser.Input.Keyboard.KeyCodes.S,
             left: Phaser.Input.Keyboard.KeyCodes.A,
             right: Phaser.Input.Keyboard.KeyCodes.D
         });
@@ -48,25 +85,7 @@ export class InputManager {
 
     _setupTouch() {
         const input = this.scene.input;
-
-        // Włącz multi-touch (do 5 palców)
-        input.addPointer(4);
-
-        // Granica środka ekranu (lewa = ruch, prawa = akcja)
-        const W = this.scene.scale.width;
-        const H = this.scene.scale.height;
-
-        // Strefy dotykowe jako rectangles w przestrzeni ekranu
-        this._leftZone = new Phaser.Geom.Rectangle(0, 0, W * 0.5, H);
-        this._rightZone = new Phaser.Geom.Rectangle(W * 0.5, 0, W * 0.5, H);
-
-        // Aktualizuj strefy przy zmianie rozdzielczości
-        this.scene.scale.on('resize', (gameSize) => {
-            const nW = gameSize.width;
-            const nH = gameSize.height;
-            this._leftZone.setTo(0, 0, nW * 0.5, nH);
-            this._rightZone.setTo(nW * 0.5, 0, nW * 0.5, nH);
-        });
+        input.addPointer(4); // Multi-touch do 5 palców
 
         input.on('pointerdown', this._onPointerDown, this);
         input.on('pointermove', this._onPointerMove, this);
@@ -74,150 +93,328 @@ export class InputManager {
         input.on('pointercancel', this._onPointerUp, this);
     }
 
+    // ─────────────────────────────────────────
+    // Touch events
+    // ─────────────────────────────────────────
+
     _onPointerDown(pointer) {
-        this._activePointers.set(pointer.id, { x: pointer.x, y: pointer.y });
-        this._processTouchState();
+        const W = this.scene.scale.width;
+        const H = this.scene.scale.height;
+
+        // Strefy przycisków (prawa strona)
+        const jumpRect = this._getJumpBtnRect(W, H);
+        const attackRect = this._getAttackBtnRect(W, H);
+        const joystickZone = this._getJoystickZone(W, H);
+
+        const px = pointer.x;
+        const py = pointer.y;
+
+        if (Phaser.Geom.Rectangle.Contains(jumpRect, px, py) && !this._jumpBtn.active) {
+            this._jumpBtn.active = true;
+            this._jumpBtn.pointerId = pointer.id;
+            this._jumpFired = true;
+            this._animateBtn(this._jumpBtnGfx, true);
+            return;
+        }
+
+        if (Phaser.Geom.Rectangle.Contains(attackRect, px, py) && !this._attackBtn.active) {
+            this._attackBtn.active = true;
+            this._attackBtn.pointerId = pointer.id;
+            this._attackFired = true;
+            this._animateBtn(this._attackBtnGfx, true);
+            return;
+        }
+
+        if (Phaser.Geom.Rectangle.Contains(joystickZone, px, py) && !this._joystick.active) {
+            this._joystick.active = true;
+            this._joystick.pointerId = pointer.id;
+            this._joystick.baseX = px;
+            this._joystick.baseY = py;
+            this._joystick.curX = px;
+            this._joystick.curY = py;
+            this._updateJoystickGraphics();
+        }
     }
 
     _onPointerMove(pointer) {
-        if (!this._activePointers.has(pointer.id)) return;
-        this._activePointers.set(pointer.id, { x: pointer.x, y: pointer.y });
-        this._processTouchState();
+        if (this._joystick.active && pointer.id === this._joystick.pointerId) {
+            this._joystick.curX = pointer.x;
+            this._joystick.curY = pointer.y;
+            this._updateJoystickGraphics();
+        }
     }
 
     _onPointerUp(pointer) {
-        this._activePointers.delete(pointer.id);
-        this._processTouchState();
+        if (pointer.id === this._joystick.pointerId) {
+            this._joystick.active = false;
+            this._joystick.pointerId = -1;
+            this.joystickX = 0;
+            this.joystickY = 0;
+            this._updateJoystickGraphics();
+        }
+        if (pointer.id === this._jumpBtn.pointerId) {
+            this._jumpBtn.active = false;
+            this._jumpBtn.pointerId = -1;
+            this._animateBtn(this._jumpBtnGfx, false);
+        }
+        if (pointer.id === this._attackBtn.pointerId) {
+            this._attackBtn.active = false;
+            this._attackBtn.pointerId = -1;
+            this._animateBtn(this._attackBtnGfx, false);
+        }
     }
 
-    /**
-     * Przetwarza wszystkie aktywne palce i ustawia odpowiednie flagi.
-     * Lewa strona → ruch (prawa/lewa połówka lewej strefy = kierunek)
-     * Prawa strona → skok/atak
-     */
-    _processTouchState() {
-        let touchLeft = false;
-        let touchRight = false;
-        let touchJump = false;
-        let touchAttack = false;
+    // ─────────────────────────────────────────
+    // Obliczenie wychylenia joysticka
+    // ─────────────────────────────────────────
 
-        const W = this.scene.scale.width;
-
-        for (const [, pos] of this._activePointers) {
-            if (pos.x < W * 0.5) {
-                // Lewa strefa: ćwiartka lewa/prawa decyduje o kierunku
-                const leftQuarter = W * 0.25;
-                if (pos.x < leftQuarter) {
-                    touchLeft = true;
-                } else {
-                    touchRight = true;
-                }
-            } else {
-                // Prawa strefa: górna połowa → skok, dolna → atak
-                const H = this.scene.scale.height;
-                if (pos.y < H * 0.5) {
-                    touchJump = true;
-                } else {
-                    touchAttack = true;
-                }
-            }
+    _computeJoystick() {
+        if (!this._joystick.active) {
+            this.joystickX = 0;
+            this.joystickY = 0;
+            return;
         }
 
-        this._touchLeft = touchLeft;
-        this._touchRight = touchRight;
-        this._touchJump = touchJump;
-        this._touchAttack = touchAttack;
+        const dx = this._joystick.curX - this._joystick.baseX;
+        const dy = this._joystick.curY - this._joystick.baseY;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        const r = this._joystick.radius;
+
+        const nx = dist > 0 ? dx / dist : 0;
+        const ny = dist > 0 ? dy / dist : 0;
+        const clamped = Math.min(dist, r) / r;
+
+        this.joystickX = Math.abs(nx * clamped) < InputManager.DEADZONE ? 0 : nx * clamped;
+        this.joystickY = Math.abs(ny * clamped) < InputManager.DEADZONE ? 0 : ny * clamped;
     }
 
-    /**
-     * Tworzy widoczne przyciski mobilne na canvasie gry (HUD touch).
-     * Są transparentne i interaktywne — pomagają użytkownicy wiedzieć gdzie dotknąć.
-     */
-    _createMobileUI() {
-        // Sprawdź czy to urządzenie dotykowe
-        const isMobile = !this.scene.sys.game.device.os.desktop;
+    // ─────────────────────────────────────────
+    // Główna pętla update
+    // ─────────────────────────────────────────
 
-        if (!isMobile) return;
-
-        const scene = this.scene;
-        const cam = scene.cameras.main;
-        const W = scene.scale.width;
-        const H = scene.scale.height;
-
-        const alpha = 0.25;
-
-        // Pomocnik do tworzenia widocznego przycisku
-        const makeBtn = (x, y, w, h, label, color) => {
-            const rect = scene.add.rectangle(x, y, w, h, color, alpha)
-                .setStrokeStyle(2, 0xffffff, 0.5)
-                .setScrollFactor(0)
-                .setDepth(100);
-
-            const txt = scene.add.text(x, y, label, {
-                fontSize: '28px', color: '#ffffff', alpha: 0.7
-            }).setOrigin(0.5).setScrollFactor(0).setDepth(101);
-
-            return { rect, txt };
-        };
-
-        // Mniejsze przyciski: wys. = 22% ekranu, szer. = 20%
-        const btnH = H * 0.22;
-        const btnW = W * 0.20;
-        const btnY = H - btnH / 2 - 8;
-
-        // D-pad lewy
-        makeBtn(W * 0.10, btnY, btnW, btnH, '◀', 0xffffff);
-        // D-pad prawy
-        makeBtn(W * 0.32, btnY, btnW, btnH, '▶', 0xffffff);
-        // Skok (prawy górny)
-        makeBtn(W * 0.82, H - btnH - 4, btnW, btnH * 0.9, '▲', 0x4fc3f7);
-        // Atak (prawy dolny)
-        makeBtn(W * 0.82, H - 8, btnW, btnH * 0.9, '⚡', 0xe94560);
-    }
-
-    /**
-     * Wywołaj w update() sceny — aktualizuje stan na podstawie klawiatury i dotyku.
-     */
     update() {
         const kb = this.cursors;
         const wasd = this.wasd;
 
-        this.left = kb.left.isDown || (wasd && wasd.left.isDown) || this._touchLeft;
-        this.right = kb.right.isDown || (wasd && wasd.right.isDown) || this._touchRight;
+        // Klawiatury — joystick analogowy symulowany jako ±1
+        let kbX = 0;
+        if (kb.left.isDown || (wasd && wasd.left.isDown)) kbX = -1;
+        else if (kb.right.isDown || (wasd && wasd.right.isDown)) kbX = 1;
 
+        this._computeJoystick();
+
+        // Jeśli joystick dotykowy aktywny — nadpisz wartość; inaczej użyj klawiatury
+        if (!this._joystick.active) {
+            this.joystickX = kbX;
+            this.joystickY = 0;
+        }
+
+        // Kompatybilność wsteczna: left/right
+        this.left = this.joystickX < -InputManager.DEADZONE;
+        this.right = this.joystickX > InputManager.DEADZONE;
+
+        // Jump
         const kbJump = Phaser.Input.Keyboard.JustDown(kb.up)
             || Phaser.Input.Keyboard.JustDown(this.spaceKey)
             || (wasd && Phaser.Input.Keyboard.JustDown(wasd.up));
 
-        // Touch jump: aktywny gdy palec właśnie dotknął (edge-trigger)
-        const prevTouchJump = this._prevTouchJump || false;
-        const touchJumpEdge = this._touchJump && !prevTouchJump;
-        this._prevTouchJump = this._touchJump;
+        this.jump = kbJump || this._jumpFired;
+        this._jumpFired = false;
 
-        const prevTouchAttack = this._prevTouchAttack || false;
-        const touchAttackEdge = this._touchAttack && !prevTouchAttack;
-        this._prevTouchAttack = this._touchAttack;
-
-        this.jump = kbJump || touchJumpEdge;
-
-        // Atak: klawiatura (X lub Z) lub touch
+        // Attack
         const kbAttack = Phaser.Input.Keyboard.JustDown(this.attackKey)
             || Phaser.Input.Keyboard.JustDown(this.attackKey2);
-        this.attack = kbAttack || touchAttackEdge;
+        this.attack = kbAttack || this._attackFired;
+        this._attackFired = false;
     }
 
-    /**
-     * Sprawdza czy gracz skacze (przytrzymanie — do ciągłego skoku jeśli potrzeba).
-     */
     isJumpHeld() {
-        return this.cursors.up.isDown || this.spaceKey.isDown || this._touchJump;
+        return this.cursors.up.isDown || this.spaceKey.isDown || this._jumpBtn.active;
     }
+
+    // ─────────────────────────────────────────
+    // Wizualny UI mobilny
+    // ─────────────────────────────────────────
+
+    _createMobileUI() {
+        const scene = this.scene;
+
+        // Graphics na joystick (baza + kursor)
+        this._graphics = scene.add.graphics().setDepth(150).setScrollFactor(0);
+
+        // Przyciski
+        this._jumpBtnGfx = scene.add.graphics().setDepth(150).setScrollFactor(0);
+        this._jumpBtnTxt = scene.add.text(0, 0, '▲', {
+            fontSize: '30px', color: '#ffffff'
+        }).setOrigin(0.5).setDepth(151).setScrollFactor(0).setAlpha(0.85);
+
+        this._attackBtnGfx = scene.add.graphics().setDepth(150).setScrollFactor(0);
+        this._attackBtnTxt = scene.add.text(0, 0, '⚡', {
+            fontSize: '26px'
+        }).setOrigin(0.5).setDepth(151).setScrollFactor(0).setAlpha(0.85);
+
+        this._drawStaticUI();
+    }
+
+    _drawStaticUI() {
+        const W = this.scene.scale.width;
+        const H = this.scene.scale.height;
+
+        // ─── Strefa joysticka (baza — rysowana jako wskazówka) ───
+        const jZ = this._getJoystickZone(W, H);
+        if (this._graphics) {
+            this._graphics.clear();
+            // Delikatna strefa w tle
+            this._graphics.fillStyle(0xffffff, 0.06);
+            this._graphics.fillRoundedRect(jZ.x, jZ.y, jZ.width, jZ.height, 16);
+            // Wskaźnik centrum joysticka
+            const cx = jZ.x + jZ.width / 2;
+            const cy = jZ.y + jZ.height / 2;
+            this._graphics.lineStyle(2, 0xffffff, 0.3);
+            this._graphics.strokeCircle(cx, cy, 36);
+            this._graphics.fillStyle(0xffffff, 0.15);
+            this._graphics.fillCircle(cx, cy, 18);
+        }
+
+        // ─── Przycisk JUMP ───
+        const jR = this._getJumpBtnRect(W, H);
+        if (this._jumpBtnGfx) {
+            this._jumpBtnGfx.clear();
+            this._jumpBtnGfx.fillStyle(0x4fc3f7, 0.3);
+            this._jumpBtnGfx.fillRoundedRect(jR.x, jR.y, jR.width, jR.height, 12);
+            this._jumpBtnGfx.lineStyle(2, 0x4fc3f7, 0.6);
+            this._jumpBtnGfx.strokeRoundedRect(jR.x, jR.y, jR.width, jR.height, 12);
+        }
+        if (this._jumpBtnTxt) {
+            this._jumpBtnTxt.setPosition(jR.x + jR.width / 2, jR.y + jR.height / 2);
+        }
+
+        // ─── Przycisk ATAK ───
+        const aR = this._getAttackBtnRect(W, H);
+        if (this._attackBtnGfx) {
+            this._attackBtnGfx.clear();
+            this._attackBtnGfx.fillStyle(0xe94560, 0.3);
+            this._attackBtnGfx.fillRoundedRect(aR.x, aR.y, aR.width, aR.height, 12);
+            this._attackBtnGfx.lineStyle(2, 0xe94560, 0.6);
+            this._attackBtnGfx.strokeRoundedRect(aR.x, aR.y, aR.width, aR.height, 12);
+        }
+        if (this._attackBtnTxt) {
+            this._attackBtnTxt.setPosition(aR.x + aR.width / 2, aR.y + aR.height / 2);
+        }
+    }
+
+    /** Rysuje ruchomy kursor joysticka */
+    _updateJoystickGraphics() {
+        if (!this._graphics) return;
+        const W = this.scene.scale.width;
+        const H = this.scene.scale.height;
+
+        this._graphics.clear();
+
+        // Strefa / tło joysticka
+        const jZ = this._getJoystickZone(W, H);
+        this._graphics.fillStyle(0xffffff, 0.06);
+        this._graphics.fillRoundedRect(jZ.x, jZ.y, jZ.width, jZ.height, 16);
+
+        if (this._joystick.active) {
+            const bx = this._joystick.baseX;
+            const by = this._joystick.baseY;
+
+            // Baza (duże kółko)
+            this._graphics.lineStyle(3, 0xffffff, 0.5);
+            this._graphics.strokeCircle(bx, by, this._joystick.radius);
+            this._graphics.fillStyle(0xffffff, 0.1);
+            this._graphics.fillCircle(bx, by, this._joystick.radius);
+
+            // Kursor (małe kółko wewnątrz)
+            const dx = this._joystick.curX - bx;
+            const dy = this._joystick.curY - by;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            const r = this._joystick.radius;
+            const cx = dist > r ? bx + (dx / dist) * r : this._joystick.curX;
+            const cy = dist > r ? by + (dy / dist) * r : this._joystick.curY;
+
+            this._graphics.fillStyle(0xffffff, 0.8);
+            this._graphics.fillCircle(cx, cy, 20);
+        } else {
+            // Statyczny wskaźnik środka
+            const cx = jZ.x + jZ.width / 2;
+            const cy = jZ.y + jZ.height / 2;
+            this._graphics.lineStyle(2, 0xffffff, 0.25);
+            this._graphics.strokeCircle(cx, cy, 36);
+            this._graphics.fillStyle(0xffffff, 0.1);
+            this._graphics.fillCircle(cx, cy, 18);
+        }
+    }
+
+    _animateBtn(gfx, pressed) {
+        if (!gfx) return;
+        const W = this.scene.scale.width;
+        const H = this.scene.scale.height;
+        const isJump = gfx === this._jumpBtnGfx;
+        const rect = isJump ? this._getJumpBtnRect(W, H) : this._getAttackBtnRect(W, H);
+        const color = isJump ? 0x4fc3f7 : 0xe94560;
+        const alpha = pressed ? 0.55 : 0.3;
+
+        gfx.clear();
+        gfx.fillStyle(color, alpha);
+        gfx.fillRoundedRect(rect.x, rect.y, rect.width, rect.height, 12);
+        gfx.lineStyle(2, color, pressed ? 1 : 0.6);
+        gfx.strokeRoundedRect(rect.x, rect.y, rect.width, rect.height, 12);
+    }
+
+    // ─────────────────────────────────────────
+    // Definicje stref (relatywne do ekranu)
+    // ─────────────────────────────────────────
+
+    _getJoystickZone(W, H) {
+        const btnW = Math.min(W * 0.38, 200);
+        const btnH = Math.min(H * 0.35, 180);
+        return new Phaser.Geom.Rectangle(8, H - btnH - 8, btnW, btnH);
+    }
+
+    _getJumpBtnRect(W, H) {
+        const bW = Math.min(W * 0.18, 110);
+        const bH = Math.min(H * 0.16, 80);
+        return new Phaser.Geom.Rectangle(W - bW - 10, H - bH * 2 - 16, bW, bH);
+    }
+
+    _getAttackBtnRect(W, H) {
+        const bW = Math.min(W * 0.18, 110);
+        const bH = Math.min(H * 0.16, 80);
+        return new Phaser.Geom.Rectangle(W - bW - 10, H - bH - 8, bW, bH);
+    }
+
+    // ─────────────────────────────────────────
+    // Obsługa resize
+    // ─────────────────────────────────────────
+
+    _onResize() {
+        // Reset joysticka (baza mogła wyjść poza ekran)
+        this._joystick.active = false;
+        this._joystick.pointerId = -1;
+        this.joystickX = 0;
+        this.joystickY = 0;
+
+        this._drawStaticUI();
+        this._updateJoystickGraphics();
+    }
+
+    // ─────────────────────────────────────────
+    // Sprzątanie
+    // ─────────────────────────────────────────
 
     destroy() {
+        this.scene.scale.off('resize', this._onResize, this);
         this.scene.input.off('pointerdown', this._onPointerDown, this);
         this.scene.input.off('pointermove', this._onPointerMove, this);
         this.scene.input.off('pointerup', this._onPointerUp, this);
         this.scene.input.off('pointercancel', this._onPointerUp, this);
-        this._activePointers.clear();
+
+        if (this._graphics) this._graphics.destroy();
+        if (this._jumpBtnGfx) this._jumpBtnGfx.destroy();
+        if (this._attackBtnGfx) this._attackBtnGfx.destroy();
+        if (this._jumpBtnTxt) this._jumpBtnTxt.destroy();
+        if (this._attackBtnTxt) this._attackBtnTxt.destroy();
     }
 }

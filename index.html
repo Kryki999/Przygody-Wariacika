@@ -1,18 +1,73 @@
-<!doctype html> 
-<html lang="en"> 
-<head> 
+<!doctype html>
+<html lang="pl">
+
+<head>
     <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Wariacik" />
+    <meta name="theme-color" content="#e94560" />
+    <meta name="description" content="Przygody Wariacika — gra przeglądarkowa 2D Phaser 3" />
+
     <title>Przygody Wariacika</title>
-    <script src="js/phaser.min.js"></script>
-    <style type="text/css">
-        body {
+
+    <!-- PWA Manifest -->
+    <link rel="manifest" href="manifest.json" />
+
+    <!-- Apple Touch Icon (placeholder — podmień gdy masz ikonę 192x192) -->
+    <!-- <link rel="apple-touch-icon" href="assets/icon-192.png" /> -->
+
+    <style>
+        * {
             margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html,
+        body {
+            width: 100%;
+            height: 100%;
+            background: #1a1a2e;
+            overflow: hidden;
+            /* Wyłącz domyślne gesty przeglądarki mobilnej (pan, zoom) */
+            touch-action: none;
+        }
+
+        canvas {
+            display: block;
+            /* Usuń 300ms delay na dotyku w starszych przeglądarkach */
+            touch-action: none;
+        }
+
+        /* Wyłącz tap highlight na mobile */
+        * {
+            -webkit-tap-highlight-color: transparent;
         }
     </style>
 </head>
+
 <body>
 
-<script src="js/main.js"></script>
+    <!-- Phaser (lokalna kopia — PHA dostępna offline) -->
+    <script src="js/phaser.min.js"></script>
+
+    <!-- Entry point jako moduł ES6 -->
+    <script type="module" src="js/main.js"></script>
+
+    <!-- Service Worker — rejestracja PWA -->
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/service-worker.js')
+                    .then(reg => console.log('[PWA] Service Worker zarejestrowany:', reg.scope))
+                    .catch(err => console.warn('[PWA] Błąd rejestracji SW:', err));
+            });
+        }
+    </script>
 
 </body>
+
 </html>

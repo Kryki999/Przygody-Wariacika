@@ -5,15 +5,13 @@
     <meta charset="UTF-8" />
     <!--
         MOBILE VIEWPORT:
-        - viewport-fit=cover → canvas rozciąga się pod notch / safe-area (iOS)
-        - minimal-ui → mobilna przeglądarka minimalizuje chrome (chowa pasek adresu)
-        - user-scalable=no → wyłączamy pinch-zoom (to gra, nie strona)
+        viewport-fit=cover → pozwala na rysowanie pod notchem na iOS.
+        Reszta układu jest obsługiwana przez CSS (env(safe-area-inset-*)).
     -->
     <meta name="viewport"
         content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <!-- black-translucent: status bar iOS jest przeźroczysty → gra widoczna pod nim -->
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Wariacik" />
     <meta name="theme-color" content="#1a1a2e" />
@@ -24,74 +22,50 @@
     <!-- PWA Manifest -->
     <link rel="manifest" href="manifest.json" />
 
-    <!-- Apple Touch Icon -->
-    <!-- <link rel="apple-touch-icon" href="assets/icon-192.png" /> -->
-
     <style>
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+            -webkit-user-select: none;
+            user-select: none;
+            touch-action: none;
         }
 
         html,
         body {
-            /*
-             * MOBILE FULLSCREEN TRICK:
-             * 100vh na iOS = viewport Z paskiem adresu (za mały)
-             * 100dvh = "dynamic viewport height" = prawdziwy widoczny obszar
-             * Fallback: 100vh dla starszych przeglądarek
+            /* 
+             * Tło poza "safe area" (np. obszar notcha) będzie miało ten kolor.
+             * Używamy 100% zamiast vh/vw, bo działają stabilniej na mobile.
              */
             width: 100%;
-            height: 100vh;
-            height: 100dvh;
-            /* nadpisuje 100vh w przeglądarkach wspierających dvh */
+            height: 100%;
             background: #1a1a2e;
             overflow: hidden;
-            touch-action: none;
-
-            /* Zapobiegaj pull-to-refresh na Androidzie */
             overscroll-behavior: none;
-
-            /* iOS safe area (notch) — padding zamiast przycinania */
-            padding:
-                env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
         }
 
-        /* Phaser canvas — wypełnia cały kontener */
+        /* 
+         * Kontener gry — uwzględnia zaokrąglone rogi i wcięcie na aparat (notch)
+         * na ekranach iPhone i nowoczesnych Androidów.
+         */
+        #game-container {
+            position: absolute;
+            top: env(safe-area-inset-top, 0px);
+            right: env(safe-area-inset-right, 0px);
+            bottom: env(safe-area-inset-bottom, 0px);
+            left: env(safe-area-inset-left, 0px);
+            overflow: hidden;
+            background: #000;
+        }
+
         canvas {
             display: block;
             width: 100% !important;
             height: 100% !important;
-            touch-action: none;
-
-            /*
-             * position: fixed + inset: 0 → canvas przyklejony do krawędzi ekranu,
-             * niezależnie od paska adresu/scrollowania.
-             * To jest kluczowy trick na mobile!
-             */
-            position: fixed !important;
-            top: 0 !important;
-            left: 0 !important;
-            right: 0 !important;
-            bottom: 0 !important;
         }
 
-        /* Wyłącz tap highlight na mobile */
-        * {
-            -webkit-tap-highlight-color: transparent;
-        }
-
-        /* Wyłącz user-select dla całej strony (gra, nie dokument) */
-        * {
-            -webkit-user-select: none;
-            user-select: none;
-        }
-
-        /*
-         * Ukryj scrollbar gdyby się pojawił (nie powinien,
-         * ale na wszelki wypadek — np. starsze Androidy)
-         */
         ::-webkit-scrollbar {
             display: none;
         }
@@ -104,45 +78,28 @@
 
 <body>
 
-    <!-- Phaser (lokalna kopia) -->
-    <script src="js/phaser.min.js"></script>
+    <div id="game-container"></div>
 
-    <!-- Entry point jako moduł ES6 -->
+    <script src="js/phaser.min.js"></script>
     <script type="module" src="js/main.js"></script>
 
-    <!-- Service Worker — rejestracja PWA -->
     <script>
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
                 navigator.serviceWorker.register('/service-worker.js')
-                    .then(reg => console.log('[PWA] Service Worker zarejestrowany:', reg.scope))
                     .catch(err => console.warn('[PWA] Błąd rejestracji SW:', err));
             });
         }
 
-        /*
-         * SCROLL-TO-HIDE ADDRESS BAR
-         * Na mobilnych przeglądarkach (Chrome Android, Samsung Internet)
-         * przewinięcie strony o 1px chowa pasek adresu.
-         * Odpalamy z 300ms opóźnieniem po załadowaniu.
-         */
+        // Scroll-to-hide address bar (stare Androidy)
         window.addEventListener('load', () => {
-            setTimeout(() => {
-                window.scrollTo(0, 1);
-            }, 300);
+            setTimeout(() => window.scrollTo(0, 1), 300);
         });
 
-        /*
-         * Zablokuj orientację na landscape (jeśli API dostępne).
-         * Działa na Chrome Android i PWA. Safari ignoruje — OK.
-         */
         if (screen.orientation && screen.orientation.lock) {
-            screen.orientation.lock('landscape').catch(() => {
-                // Większość przeglądarek blokuje to poza PWA — ignorujemy
-            });
+            screen.orientation.lock('landscape').catch(() => { });
         }
     </script>
-
 </body>
 
 </html>

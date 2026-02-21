@@ -18,15 +18,16 @@ import { OrientationOverlay } from './ui/OrientationOverlay.js';
 // ─── Konfiguracja Phaser ───
 const config = {
     type: Phaser.AUTO,
+    parent: 'game-container',
 
-    // RESIZE — canvas zawsze równy rozmiarowi okna przeglądarki
-    // Kamera GameScene używa setBounds do ograniczenia widoku mapy
+    // RESIZE — canvas dostosowuje się do rodzica (game-container),
+    // a game-container zarządza wcięciami na notcha (safe area) z poziomu CSS.
     scale: {
         mode: Phaser.Scale.RESIZE,
+        parent: 'game-container',
         autoCenter: Phaser.Scale.CENTER_BOTH,
-        // Punkt startowy (przed pierwszym resize); ScaleManager nadpisze przy starcie
-        width: window.innerWidth,
-        height: window.innerHeight,
+        width: '100%',
+        height: '100%',
     },
 
     backgroundColor: '#1a1a2e',

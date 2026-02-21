@@ -78,6 +78,24 @@ export class UIScene extends Phaser.Scene {
             this.hearts.unshift(heart);
         }
 
+        // ─── Fullscreen toggle ───
+        this.fsBtn = this.add.text(W - 14, 52,
+            this.scale.isFullscreen ? '◳' : '⛶', {
+            fontSize: '28px', color: '#ffffff',
+            stroke: '#000000', strokeThickness: 4
+        }).setOrigin(1, 0).setScrollFactor(0).setDepth(200).setInteractive({ useHandCursor: true });
+
+        this.fsBtn.on('pointerdown', () => {
+            if (this.scale.isFullscreen) {
+                this.scale.stopFullscreen();
+            } else {
+                this.scale.startFullscreen();
+            }
+        });
+
+        this.scale.on('enterfullscreen', () => this.fsBtn.setText('◳'));
+        this.scale.on('leavefullscreen', () => this.fsBtn.setText('⛶'));
+
         // ─── Wskaźnik power-upa ───
         this._buffBg = this.add.rectangle(W / 2, H * 0.15, 180, 38, 0x000000, 0.7)
             .setScrollFactor(0).setDepth(199).setAlpha(0);
@@ -119,10 +137,11 @@ export class UIScene extends Phaser.Scene {
         if (this._buffLabel) this._buffLabel.setPosition(W / 2, H * 0.15);
         if (this._portalFlash) this._portalFlash.setPosition(W / 2, H * 0.12);
 
-        // Serca
+        // Serca i Fullscreen
         this.hearts.forEach((h, i) => {
             h.setPosition(W - 14 - i * 34, 14);
         });
+        if (this.fsBtn) this.fsBtn.setPosition(W - 14, 52);
 
         // Combo HUD
         if (this._comboText) this._comboText.setPosition(W / 2, H - 90);

@@ -116,5 +116,23 @@ export class MenuScene extends Phaser.Scene {
                 muteBtn.setText(muted ? '🔇' : '🔊');
             });
         }
+
+        // ─── Fullscreen toggle ───
+        const fsBtn = this.add.text(W - 16, 16,
+            this.scale.isFullscreen ? '◳' : '⛶', {
+            fontSize: '26px'
+        }).setOrigin(1, 0).setInteractive({ useHandCursor: true });
+
+        fsBtn.on('pointerdown', () => {
+            if (this.scale.isFullscreen) {
+                this.scale.stopFullscreen();
+            } else {
+                this.scale.startFullscreen();
+            }
+        });
+
+        // Nasłuchuj zmian trybu fullscreen (np. wyjście z menu przeglądarki) by odświeżyć ikonę
+        this.scale.on('enterfullscreen', () => fsBtn.setText('◳'));
+        this.scale.on('leavefullscreen', () => fsBtn.setText('⛶'));
     }
 }

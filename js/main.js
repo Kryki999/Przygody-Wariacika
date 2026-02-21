@@ -51,30 +51,20 @@ const game = new Phaser.Game(config);
 // ─── Overlay orientacji (DOM — niezależny od Phasera) ───
 const orientationOverlay = new OrientationOverlay(game);
 
-/**
- * orientationchange DEBOUNCE
- * Przeglądarki mobilne opuszczają zdarzenie zmiany rozmiaru okna z opóźnieniem
- * po obrocie ekranu (pasek adresu chowa się, viewport się zmienia).
- * Czekamy 250ms, żeby dokładne wymiary były już dostępne,
- * a następnie wymuszamy na Phaserze ponowne przeliczenie canvasa.
- */
-let _orientationTimer = null;
-window.addEventListener('orientationchange', () => {
-    clearTimeout(_orientationTimer);
-    _orientationTimer = setTimeout(() => {
-        // Wymuś Phasera do odczytu aktualnego window.innerWidth/innerHeight
+// ─── Dodatkowe zabezpieczenie: reaguj na resize/orientationchange ───
+window.addEventListener('resize', () => {
+    // Wymuś samo przeliczenie przez scalera Phaserowego (bez narzucania manualnego innerWidth!)
+    if (game.scale) {
         game.scale.refresh();
-        // Również bezpośrednio ustaw rozmiar na bieżący rozmiar okna
-        game.scale.resize(window.innerWidth, window.innerHeight);
-    }, 250);
+    }
 });
 
-// Dodatkowe zabezpieczenie: reaguj również na zwykły resize (przeglądarka desktop)
-window.addEventListener('resize', () => {
-    clearTimeout(_orientationTimer);
-    _orientationTimer = setTimeout(() => {
-        game.scale.refresh();
-    }, 100);
+window.addEventListener('orientationchange', () => {
+    setTimeout(() => {
+        if (game.scale) {
+            game.scale.refresh();
+        }
+    }, 250);
 });
 
 // ─── PWA: Install Prompt ───

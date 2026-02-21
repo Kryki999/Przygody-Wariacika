@@ -37,10 +37,10 @@
         body {
             /* 
              * Tło poza "safe area" (np. obszar notcha) będzie miało ten kolor.
-             * Używamy 100% zamiast vh/vw, bo działają stabilniej na mobile.
+             * 100dvh rozwiązuje problemy ze skaczącym paskiem adresu na mobile.
              */
-            width: 100%;
-            height: 100%;
+            width: 100vw;
+            height: 100dvh;
             background: #1a1a2e;
             overflow: hidden;
             overscroll-behavior: none;

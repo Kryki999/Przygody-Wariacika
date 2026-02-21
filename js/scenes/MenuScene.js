@@ -118,21 +118,23 @@ export class MenuScene extends Phaser.Scene {
         }
 
         // ─── Fullscreen toggle ───
-        const fsBtn = this.add.text(W - 16, 16,
-            this.scale.isFullscreen ? '◳' : '⛶', {
-            fontSize: '26px'
-        }).setOrigin(1, 0).setInteractive({ useHandCursor: true });
+        if (this.sys.game.device.fullscreen.available) {
+            const fsBtn = this.add.text(W - 16, 16,
+                this.scale.isFullscreen ? '◳' : '⛶', {
+                fontSize: '26px'
+            }).setOrigin(1, 0).setInteractive({ useHandCursor: true });
 
-        fsBtn.on('pointerdown', () => {
-            if (this.scale.isFullscreen) {
-                this.scale.stopFullscreen();
-            } else {
-                this.scale.startFullscreen();
-            }
-        });
+            fsBtn.on('pointerdown', () => {
+                if (this.scale.isFullscreen) {
+                    this.scale.stopFullscreen();
+                } else {
+                    this.scale.startFullscreen();
+                }
+            });
 
-        // Nasłuchuj zmian trybu fullscreen (np. wyjście z menu przeglądarki) by odświeżyć ikonę
-        this.scale.on('enterfullscreen', () => fsBtn.setText('◳'));
-        this.scale.on('leavefullscreen', () => fsBtn.setText('⛶'));
+            // Nasłuchuj zmian trybu fullscreen (np. wyjście z menu przeglądarki) by odświeżyć ikonę
+            this.scale.on('enterfullscreen', () => fsBtn.setText('◳'));
+            this.scale.on('leavefullscreen', () => fsBtn.setText('⛶'));
+        }
     }
 }

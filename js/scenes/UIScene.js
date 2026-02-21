@@ -79,22 +79,27 @@ export class UIScene extends Phaser.Scene {
         }
 
         // ─── Fullscreen toggle ───
-        this.fsBtn = this.add.text(W - 14, 52,
-            this.scale.isFullscreen ? '◳' : '⛶', {
-            fontSize: '28px', color: '#ffffff',
-            stroke: '#000000', strokeThickness: 4
-        }).setOrigin(1, 0).setScrollFactor(0).setDepth(200).setInteractive({ useHandCursor: true });
+        // Sprawdź czy fullscreen jest w ogóle obsługiwany przez urządzenie (np. iOS Safari go NIE obsługuje na iPhonie)
+        if (this.sys.game.device.fullscreen.available) {
+            this.fsBtn = this.add.text(W - 14, 52,
+                this.scale.isFullscreen ? '◳' : '⛶', {
+                fontSize: '28px', color: '#ffffff',
+                stroke: '#000000', strokeThickness: 4
+            }).setOrigin(1, 0).setScrollFactor(0).setDepth(200).setInteractive({ useHandCursor: true });
 
-        this.fsBtn.on('pointerdown', () => {
-            if (this.scale.isFullscreen) {
-                this.scale.stopFullscreen();
-            } else {
-                this.scale.startFullscreen();
-            }
-        });
+            this.fsBtn.on('pointerdown', () => {
+                if (this.scale.isFullscreen) {
+                    this.scale.stopFullscreen();
+                } else {
+                    this.scale.startFullscreen();
+                }
+            });
 
-        this.scale.on('enterfullscreen', () => this.fsBtn.setText('◳'));
-        this.scale.on('leavefullscreen', () => this.fsBtn.setText('⛶'));
+            this.scale.on('enterfullscreen', () => this.fsBtn.setText('◳'));
+            this.scale.on('leavefullscreen', () => this.fsBtn.setText('⛶'));
+        } else {
+            this.fsBtn = null; // Brak wsparcia
+        }
 
         // ─── Wskaźnik power-upa ───
         this._buffBg = this.add.rectangle(W / 2, H * 0.15, 180, 38, 0x000000, 0.7)
